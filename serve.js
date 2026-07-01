@@ -1,6 +1,6 @@
 // Zero-dependency static file server for local dev — no bundler, no build step.
-// Serves the repo root (including node_modules) so the browser can resolve the
-// "three" import map entries directly as native ES modules.
+// three.js is loaded from a CDN via the import map in index.html, so this just
+// serves the plain static files (index.html, style.css, src/*.js).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
