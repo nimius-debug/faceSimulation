@@ -87,6 +87,36 @@ export class SkinScene {
     return new THREE.CanvasTexture(cv);
   }
 
+  // mottled, broken-capillary rash — several overlapping soft blobs plus
+  // fine speckling, so inflamed skin reads as blotchy and irregular instead
+  // of one clean gradient circle
+  rashTexture(seed) {
+    const s = 160, cv = document.createElement('canvas'); cv.width = cv.height = s;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, s, s);
+    const blobs = 4 + Math.floor(hashNoise(seed, 2, 3) * 3);
+    for (let b = 0; b < blobs; b++) {
+      const bx = s * 0.5 + (hashNoise(seed + b, 1, 0) - 0.5) * s * 0.6;
+      const by = s * 0.5 + (hashNoise(seed + b, 2, 0) - 0.5) * s * 0.6;
+      const br = s * (0.14 + hashNoise(seed + b, 3, 0) * 0.16);
+      const grad = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+      grad.addColorStop(0, 'rgba(255,255,255,0.85)');
+      grad.addColorStop(0.6, 'rgba(255,255,255,0.45)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+    }
+    // fine speckling — the tiny broken-vessel dots visible within a real rash
+    for (let i = 0; i < 34; i++) {
+      const px = hashNoise(seed + i, 5, 1) * s, py = hashNoise(seed + i, 6, 2) * s;
+      const pr = 0.8 + hashNoise(seed + i, 7, 3) * 1.6;
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${(0.25 + hashNoise(seed + i, 8, 4) * 0.35).toFixed(2)})`;
+      ctx.fill();
+    }
+    return new THREE.CanvasTexture(cv);
+  }
+
   // subtle pore / micro-texture bump+roughness map so the skin isn't perfectly smooth
   skinDetailTextures() {
     const s = 512;
@@ -383,8 +413,10 @@ export class SkinScene {
     this.soft = this.softTexture();
     this.blotches = [1, 2, 3, 4, 5].map((s) => this.blotchTexture(s));
     this.creases = [1, 2, 3].map((s) => this.creaseTexture(s));
+    this.rashes = [1, 2, 3, 4].map((s) => this.rashTexture(s));
     const pickBlotch = () => this.blotches[Math.floor(Math.random() * this.blotches.length)];
     const pickCrease = () => this.creases[Math.floor(Math.random() * this.creases.length)];
+    const pickRash = () => this.rashes[Math.floor(Math.random() * this.rashes.length)];
     const orient = (mesh, h) => { mesh.position.copy(h.point).addScaledVector(h.normal, 0.006); mesh.lookAt(h.point.clone().add(h.normal)); };
 
     // coordinate ranges differ between the procedural sculpt and the uploaded
@@ -429,8 +461,9 @@ export class SkinScene {
       // behind the raised bump
       const haloSize = r * 2 * (2.6 + Math.random() * 0.6);
       const halo = new THREE.Mesh(new THREE.PlaneGeometry(haloSize, haloSize),
-        new THREE.MeshBasicMaterial({ map: pickBlotch(), transparent: true, color: 0xc4574a, opacity: 0, depthWrite: false }));
+        new THREE.MeshBasicMaterial({ map: pickRash(), transparent: true, color: 0xc4574a, opacity: 0, depthWrite: false }));
       halo.position.copy(h.point).addScaledVector(h.normal, 0.004); halo.lookAt(h.point.clone().add(h.normal));
+      halo.rotateZ(Math.random() * Math.PI * 2);
       group.add(halo);
       const bump = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12),
         new THREE.MeshStandardMaterial({ color: 0xb2544a, roughness: 0.55, emissive: 0x3a1410, emissiveIntensity: 0.18 }));
@@ -479,7 +512,7 @@ export class SkinScene {
     this.redPool = [];
     for (const [rx, ry] of P.redPatches) {
       const h = this.faceHit([rx - 0.06, rx + 0.06], [ry - 0.06, ry + 0.06], 60); if (!h) continue;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(P.redSize[0], P.redSize[1]), new THREE.MeshBasicMaterial({ map: pickBlotch(), transparent: true, color: 0xc96858, opacity: 0, depthWrite: false }));
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(P.redSize[0], P.redSize[1]), new THREE.MeshBasicMaterial({ map: pickRash(), transparent: true, color: 0xc96858, opacity: 0, depthWrite: false }));
       orient(m, h); m.rotateZ(Math.random() * Math.PI * 2); m.visible = false; this.featGroup.add(m); this.redPool.push(m);
     }
   }
@@ -530,12 +563,21 @@ export class SkinScene {
     this.curRough = Math.max(0.12, Math.min(0.9, 0.82 - v.sebum / 170 - v.glow * 0.12 - v.hydration / 650));
     this.curClear = Math.max(0, Math.min(1, v.sebum / 130 + v.glow * 0.25));
     this.applySheen();
-    this.poolUpdate(this.acnePool, v.acne, 1);
-    this.poolUpdate(this.spotPool, v.pigment / 11, Math.min(1, v.pigment / 85));
-    this.poolUpdate(this.scarPool, v.scars / 14, Math.min(1, v.scars / 80) * 0.65);
-    this.poolUpdate(this.linePool, v.lines / 16, Math.min(1, v.lines / 78) * 0.85);
+    // the skin-type baseline (BASE[skinType] in state.js) always carries some
+    // nonzero acne/pigment/scars/lines/redness — e.g. oily skin has a
+    // baseline acne=5 even with the "Acne" condition unchecked. That's
+    // legitimate for the numeric analysis (an oily complexion IS naturally a
+    // little blemish-prone), but visually it meant unchecking every
+    // condition still left blemishes on the model. Gate the 3D overlays by
+    // the condition toggles themselves so "nothing selected" reads as clear
+    // skin, independent of what the underlying numbers say.
+    const c = state.conditions;
+    this.poolUpdate(this.acnePool, c.acne ? v.acne : 0, 1);
+    this.poolUpdate(this.spotPool, c.pigment ? v.pigment / 11 : 0, Math.min(1, v.pigment / 85));
+    this.poolUpdate(this.scarPool, c.scars ? v.scars / 14 : 0, Math.min(1, v.scars / 80) * 0.65);
+    this.poolUpdate(this.linePool, c.lines ? v.lines / 16 : 0, Math.min(1, v.lines / 78) * 0.85);
     const redOpacityMax = this.usingRealModel ? 0.6 : 0.42;
-    for (const m of this.redPool) { const o = Math.min(1, (v.redness - 22) / 70) * redOpacityMax; m.visible = o > 0.01; m.material.opacity = o; }
+    for (const m of this.redPool) { const o = c.redness ? Math.min(1, (v.redness - 22) / 70) * redOpacityMax : 0; m.visible = o > 0.01; m.material.opacity = o; }
   }
 
   async initThree() {
