@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skin Simulator — Atelier Derma</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./node_modules/three/build/three.module.js",
+    "three/addons/": "./node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div class="app">
+  <!-- ===== STAGE ===== -->
+  <div class="stage">
+    <div id="stage-mount" class="stage-mount"></div>
+
+    <!-- brand -->
+    <div class="brand">
+      <div class="brand-eyebrow">Atelier Derma</div>
+      <div class="brand-title">Skin Simulator</div>
+      <div class="brand-sub">a study of skin, ingredient &amp; time</div>
+    </div>
+
+    <!-- orbit hint -->
+    <div class="orbit-hint">
+      <span class="orbit-hint-ring"></span>
+      drag to rotate · scroll to zoom
+    </div>
+
+    <!-- status line -->
+    <div class="status-line">
+      <div id="status-text" class="status-text"></div>
+    </div>
+
+    <!-- loading -->
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <div class="loading-text">preparing the skin model…</div>
+    </div>
+
+    <!-- ===== TIMELINE ===== -->
+    <div class="timeline">
+      <div class="timeline-row">
+        <button id="play-btn" class="play-btn" title="Play the 6-month simulation">
+          <span id="play-icon" class="play-icon"></span>
+        </button>
+        <div class="timeline-body">
+          <div class="timeline-header">
+            <span class="timeline-label">Timeline</span>
+            <span id="month-label" class="month-label">Day 0</span>
+          </div>
+          <input id="scrub" type="range" min="0" max="6" step="0.05" value="0" disabled class="scrub">
+          <div class="timeline-ticks">
+            <span>now</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6 mo</span>
+          </div>
+        </div>
+      </div>
+      <div id="scrub-hint" class="scrub-hint">pour an ingredient to begin the timeline</div>
+    </div>
+  </div>
+
+  <!-- ===== PANEL ===== -->
+  <div class="panel">
+    <!-- Skin type -->
+    <div class="section-label">01 · Skin type</div>
+    <div id="skin-grid" class="skin-grid"></div>
+    <div id="skin-blurb" class="blurb"></div>
+
+    <!-- Conditions -->
+    <div class="section-label section-label--mid">02 · Conditions</div>
+    <div id="condition-list" class="condition-list"></div>
+
+    <!-- Ingredient -->
+    <div class="section-label section-label--mid">03 · Ingredient</div>
+    <div id="ingredient-list" class="ingredient-list"></div>
+    <div id="ing-blurb" class="blurb blurb--ing"></div>
+
+    <!-- Pour + reset -->
+    <div class="pour-row">
+      <button id="pour-btn" class="pour-btn"></button>
+      <button id="reset-btn" class="reset-btn" title="Reset">↺</button>
+    </div>
+
+    <!-- Readouts -->
+    <div class="section-label section-label--metrics">Live skin analysis</div>
+    <div id="metrics-list" class="metrics-list"></div>
+
+    <div class="footer-note">
+      An illustrative model of how actives behave over ~6 months. Educational — not medical advice.
+    </div>
+  </div>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

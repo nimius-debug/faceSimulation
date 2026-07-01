@@ -1,0 +1,16 @@
+{
+  "name": "skin-simulator",
+  "version": "1.0.0",
+  "description": "Atelier Derma Skin Simulator — an orbitable 3D bust that visualizes how skin types, conditions and skincare actives evolve over 6 months.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node serve.js"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.169.0"
+  }
+}
