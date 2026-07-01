@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ING } from './state.js';
+
+const FACE_MODEL_URL = './assets/models/face-model.glb';
 
 // gaussian bump helper used throughout the facial sculpt
 const g = (v, s) => Math.exp(-(v * v) / (2 * s * s));
@@ -71,8 +74,32 @@ export class SkinScene {
     return { bump, rough };
   }
 
-  // ---------- head sculpt ----------
-  buildHead() {
+  // ---------- real face model (uploaded scan), procedural sculpt as fallback ----------
+  loadFaceModel() {
+    return new Promise((resolve) => {
+      new GLTFLoader().load(FACE_MODEL_URL, (gltf) => {
+        let mesh = null;
+        gltf.scene.traverse((o) => { if (o.isMesh && !mesh) mesh = o; });
+        if (!mesh) { resolve(null); return; }
+        const src = mesh.material;
+        this.headMat = new THREE.MeshPhysicalMaterial({
+          map: src && src.map ? src.map : null,
+          color: 0xffffff,
+          roughness: (src && src.roughness) ?? 0.65,
+          metalness: 0,
+          clearcoat: 0.22, clearcoatRoughness: 0.55,
+          sheen: 0.25, sheenRoughness: 0.75, sheenColor: new THREE.Color(0xf3d9c2),
+        });
+        mesh.material = this.headMat;
+        mesh.updateMatrixWorld(true);
+        this.scene.add(gltf.scene);
+        resolve(mesh);
+      }, undefined, () => resolve(null));
+    });
+  }
+
+  // ---------- head sculpt (fallback when no uploaded model is present) ----------
+  buildProceduralHead() {
     const geo = new THREE.SphereGeometry(1, 220, 220);
     const p = geo.attributes.position;
     for (let i = 0; i < p.count; i++) {
@@ -147,6 +174,7 @@ export class SkinScene {
     this.headMesh.position.y = 0.15;
     this.headMesh.updateMatrixWorld(true);
     this.scene.add(this.headMesh);
+    this.headYOffset = 0.15;
   }
 
   // ---------- eyes (painted decals — avoids 3D eyeballs poking through the sculpted shell) ----------
@@ -264,25 +292,28 @@ export class SkinScene {
     this.earsGroup = group;
   }
 
-  buildPedestal() {
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.7, 48), this.headMat);
-    neck.position.y = -0.86; this.scene.add(neck);
+  buildPedestal(bottomY = -0.86, withNeck = true) {
+    if (withNeck) {
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.7, 48), this.headMat);
+      neck.position.y = bottomY; this.scene.add(neck);
+    }
     const plm = new THREE.MeshStandardMaterial({ color: 0xd9c8b2, roughness: 0.92 });
+    const topY = bottomY - (withNeck ? 0.38 : 0.02);
     const plinthTop = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.12, 48), plm);
-    plinthTop.position.y = -1.24; this.scene.add(plinthTop);
+    plinthTop.position.y = topY; this.scene.add(plinthTop);
     const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.92, 0.5, 48), plm);
-    plinth.position.y = -1.55; this.scene.add(plinth);
+    plinth.position.y = topY - 0.31; this.scene.add(plinth);
     const st = this.softTexture();
     const sm = new THREE.MeshBasicMaterial({ map: st, transparent: true, color: 0x4a3722, opacity: 0.3, depthWrite: false });
     const shad = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 3.0), sm);
-    shad.rotation.x = -Math.PI / 2; shad.position.y = -1.79; this.scene.add(shad);
+    shad.rotation.x = -Math.PI / 2; shad.position.y = topY - 0.55; this.scene.add(shad);
   }
 
   faceHit(xr, yr, tries) {
     const rc = new THREE.Raycaster();
     for (let k = 0; k < (tries || 40); k++) {
       const x = xr[0] + Math.random() * (xr[1] - xr[0]);
-      const y = 0.15 + yr[0] + Math.random() * (yr[1] - yr[0]);
+      const y = this.headYOffset + yr[0] + Math.random() * (yr[1] - yr[0]);
       rc.set(new THREE.Vector3(x, y, 4), new THREE.Vector3(0, 0, -1));
       const hit = rc.intersectObject(this.headMesh, false)[0];
       if (hit) {
@@ -313,9 +344,38 @@ export class SkinScene {
     this.soft = this.softTexture();
     const orient = (mesh, h) => { mesh.position.copy(h.point).addScaledVector(h.normal, 0.006); mesh.lookAt(h.point.clone().add(h.normal)); };
 
+    // coordinate ranges differ between the procedural sculpt and the uploaded
+    // scan (different proportions/scale) — calibrated against each mesh by
+    // raycasting known landmarks (brow, nose tip, mouth, chin, cheeks).
+    const P = this.usingRealModel
+      ? {
+          acneX: [-0.42, 0.42], acneY: [-0.22, 0.58],
+          spotX: [-0.48, 0.48], spotY: [-0.05, 0.4], spotMinAbsX: 0.14,
+          scarX: [-0.42, 0.42], scarY: [-0.2, 0.15], scarMinAbsX: 0.12,
+          lineForeheadX: [-0.35, 0.35], lineForeheadY: [0.42, 0.56],
+          lineCornerX: [0.20, 0.40], lineCornerY: [0.36, 0.42],
+          redPatches: [[-0.26, 0.06], [0.26, 0.06], [0, 0.24], [-0.20, 0.32], [0.20, 0.32]],
+          redSize: [0.26, 0.24],
+          eyeCenters: [[-0.10, 0.40], [0.10, 0.40]],
+        }
+      : {
+          acneX: [-0.5, 0.5], acneY: [-0.55, 0.6],
+          spotX: [-0.55, 0.55], spotY: [-0.35, 0.28], spotMinAbsX: 0.16,
+          scarX: [-0.5, 0.5], scarY: [-0.45, 0.12], scarMinAbsX: 0.14,
+          lineForeheadX: [-0.42, 0.42], lineForeheadY: [0.24, 0.52],
+          lineCornerX: [0.24, 0.5], lineCornerY: [0.0, 0.16],
+          redPatches: [[-0.4, -0.08], [0.4, -0.08], [0, -0.05], [-0.3, 0.14], [0.3, 0.14]],
+          redSize: [0.34, 0.30],
+          eyeCenters: [],
+        };
+    // keep blemishes off the eyes themselves — the procedural head's socket
+    // geometry naturally discourages this, but the real scan's eye area is a
+    // normal continuous surface so it needs an explicit exclusion
+    const nearEye = (h) => P.eyeCenters.some(([ex, ey]) => Math.abs(h.point.x - ex) < 0.13 && Math.abs(h.point.y - ey) < 0.09);
+
     this.acnePool = [];
     for (let i = 0; i < 26; i++) {
-      const h = this.faceHit([-0.5, 0.5], [-0.55, 0.6]); if (!h) continue;
+      const h = this.faceHit(P.acneX, P.acneY); if (!h || nearEye(h)) continue;
       const r = 0.022 + Math.random() * 0.016;
       const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12), new THREE.MeshStandardMaterial({ color: 0xc85b4e, roughness: 0.5, emissive: 0x5a1712, emissiveIntensity: 0.25 }));
       m.position.copy(h.point).addScaledVector(h.normal, r * 0.5); m.scale.setScalar(0.001); m.visible = false;
@@ -323,33 +383,32 @@ export class SkinScene {
     }
     this.spotPool = [];
     for (let i = 0; i < 16; i++) {
-      const h = this.faceHit([-0.55, 0.55], [-0.35, 0.28]); if (!h) continue;
-      if (Math.abs(h.point.x) < 0.16) continue;
+      const h = this.faceHit(P.spotX, P.spotY); if (!h || nearEye(h)) continue;
+      if (Math.abs(h.point.x) < P.spotMinAbsX) continue;
       const s = 0.09 + Math.random() * 0.07;
       const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: this.soft, transparent: true, color: 0x8a5636, opacity: 0, depthWrite: false }));
       orient(m, h); m.visible = false; this.featGroup.add(m); this.spotPool.push(m);
     }
     this.scarPool = [];
     for (let i = 0; i < 12; i++) {
-      const h = this.faceHit([-0.5, 0.5], [-0.45, 0.12]); if (!h) continue;
-      if (Math.abs(h.point.x) < 0.14) continue;
+      const h = this.faceHit(P.scarX, P.scarY); if (!h) continue;
+      if (Math.abs(h.point.x) < P.scarMinAbsX) continue;
       const s = 0.05 + Math.random() * 0.04;
       const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: this.soft, transparent: true, color: 0x7c4a38, opacity: 0, depthWrite: false }));
       orient(m, h); m.visible = false; this.featGroup.add(m); this.scarPool.push(m);
     }
     this.linePool = [];
     for (let i = 0; i < 8; i++) {
-      const h = i < 5 ? this.faceHit([-0.42, 0.42], [0.24, 0.52]) : this.faceHit([0.24, 0.5], [0.0, 0.16]);
+      const h = i < 5 ? this.faceHit(P.lineForeheadX, P.lineForeheadY) : this.faceHit(P.lineCornerX, P.lineCornerY);
       if (!h) continue;
       const m = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.008, 0.004), new THREE.MeshBasicMaterial({ color: 0x6e4c38, transparent: true, opacity: 0 }));
       m.position.copy(h.point).addScaledVector(h.normal, 0.004); m.lookAt(h.point.clone().add(h.normal));
       m.rotateZ(Math.random() * 0.5 - 0.25); m.visible = false; this.featGroup.add(m); this.linePool.push(m);
     }
     this.redPool = [];
-    const rp = [[-0.4, -0.08], [0.4, -0.08], [0, -0.05], [-0.3, 0.14], [0.3, 0.14]];
-    for (const [rx, rz] of rp) {
-      const h = this.faceHit([rx - 0.06, rx + 0.06], [rz - 0.06, rz + 0.06], 60); if (!h) continue;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.30), new THREE.MeshBasicMaterial({ map: this.soft, transparent: true, color: 0xd06a5a, opacity: 0, depthWrite: false }));
+    for (const [rx, ry] of P.redPatches) {
+      const h = this.faceHit([rx - 0.06, rx + 0.06], [ry - 0.06, ry + 0.06], 60); if (!h) continue;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(P.redSize[0], P.redSize[1]), new THREE.MeshBasicMaterial({ map: this.soft, transparent: true, color: 0xd06a5a, opacity: 0, depthWrite: false }));
       orient(m, h); m.visible = false; this.featGroup.add(m); this.redPool.push(m);
     }
   }
@@ -377,9 +436,15 @@ export class SkinScene {
     if (!this.threeReady) return;
     const eff = state.poured ? state.months : 0;
     const v = computeState({ skinType: state.skinType, conditions: state.conditions, ingredient: state.ingredient }, eff);
-    const base = [233, 196, 168];
-    let col = this.lerp3(base, [214, 120, 104], Math.min(1, (v.redness - 15) / 70) * 0.6);
-    col = this.lerp3(col, [198, 183, 170], Math.min(1, (60 - v.hydration) / 60) * 0.18);
+    // the procedural head has a flat base material color to tint; the real
+    // scan already has its true tone baked into its texture, so tint from
+    // white (no-op at baseline) instead of overwriting its natural color
+    const base = this.usingRealModel ? [255, 255, 255] : [233, 196, 168];
+    const rednessTarget = this.usingRealModel ? [255, 120, 105] : [214, 120, 104];
+    const dullTarget = this.usingRealModel ? [220, 206, 194] : [198, 183, 170];
+    const rednessStrength = this.usingRealModel ? 0.9 : 0.6;
+    let col = this.lerp3(base, rednessTarget, Math.min(1, (v.redness - 15) / 70) * rednessStrength);
+    col = this.lerp3(col, dullTarget, Math.min(1, (60 - v.hydration) / 60) * 0.18);
     this.headMat.color.setRGB(col[0] / 255, col[1] / 255, col[2] / 255);
     this.curRough = Math.max(0.12, Math.min(0.9, 0.82 - v.sebum / 170 - v.glow * 0.12 - v.hydration / 650));
     this.curClear = Math.max(0, Math.min(1, v.sebum / 130 + v.glow * 0.25));
@@ -388,10 +453,11 @@ export class SkinScene {
     this.poolUpdate(this.spotPool, v.pigment / 11, Math.min(1, v.pigment / 85));
     this.poolUpdate(this.scarPool, v.scars / 14, Math.min(1, v.scars / 80) * 0.65);
     this.poolUpdate(this.linePool, v.lines / 16, Math.min(1, v.lines / 78) * 0.85);
-    for (const m of this.redPool) { const o = Math.min(1, (v.redness - 22) / 70) * 0.42; m.visible = o > 0.01; m.material.opacity = o; }
+    const redOpacityMax = this.usingRealModel ? 0.6 : 0.42;
+    for (const m of this.redPool) { const o = Math.min(1, (v.redness - 22) / 70) * redOpacityMax; m.visible = o > 0.01; m.material.opacity = o; }
   }
 
-  initThree() {
+  async initThree() {
     const w = this.mount.clientWidth || 800, h = this.mount.clientHeight || 600;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(34, w / h, 0.1, 100);
@@ -414,7 +480,22 @@ export class SkinScene {
     const fill = new THREE.DirectionalLight(0xffe6cf, 0.3); fill.position.set(3, 0.3, 1.8); this.scene.add(fill);
     const rim = new THREE.DirectionalLight(0xffdcc4, 0.7); rim.position.set(2, 1.8, -3); this.scene.add(rim);
 
-    this.buildHead(); this.buildPedestal(); this.buildEyes(); this.buildEars(); this.buildFeatures();
+    const realMesh = await this.loadFaceModel();
+    if (realMesh) {
+      this.headMesh = realMesh;
+      this.usingRealModel = true;
+      this.headYOffset = 0;
+      const box = new THREE.Box3().setFromObject(realMesh);
+      this.buildPedestal(box.min.y, false);
+      this.controls.target.set(0, 0.12, 0);
+    } else {
+      this.buildProceduralHead();
+      this.usingRealModel = false;
+      this.buildPedestal(-0.86, true);
+      this.buildEyes();
+      this.buildEars();
+    }
+    this.buildFeatures();
     this.pourGroup = new THREE.Group(); this.scene.add(this.pourGroup);
     this.droplets = []; this.splats = []; this.wet = 0;
     this.clock = new THREE.Clock();
