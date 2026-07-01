@@ -45,6 +45,13 @@ function setScenario(patch) {
   setState({ ...patch, poured: false, months: 0, pouring: false, playing: false });
 }
 
+// Switching which ingredient is selected is just browsing/comparing options —
+// it shouldn't discard the skin's current simulated progress. Only an actual
+// Pour (see pour() below) starts a fresh application.
+function selectIngredient(key) {
+  setState({ ingredient: key });
+}
+
 function toggleCond(k) {
   const conditions = { ...state.conditions, [k]: !state.conditions[k] };
   if (scene) scene.clearPour();
@@ -130,7 +137,7 @@ function buildIngredientList() {
     textCol.appendChild(desc);
     btn.appendChild(dot);
     btn.appendChild(textCol);
-    btn.addEventListener('click', () => setScenario({ ingredient: key }));
+    btn.addEventListener('click', () => selectIngredient(key));
     el.ingredientList.appendChild(btn);
   }
 }

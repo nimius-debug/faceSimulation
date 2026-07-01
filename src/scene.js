@@ -48,6 +48,45 @@ export class SkinScene {
     return new THREE.CanvasTexture(cv);
   }
 
+  // irregular, feather-edged blotch — real skin discoloration (redness, dark
+  // spots, scars) never reads as a perfect circle; each seed gives a distinct
+  // organic shape so a cluster of them doesn't look like stamped copies
+  blotchTexture(seed) {
+    const s = 128, cv = document.createElement('canvas'); cv.width = cv.height = s;
+    const ctx = cv.getContext('2d');
+    const cx = s / 2, cy = s / 2, N = 14;
+    ctx.beginPath();
+    for (let i = 0; i <= N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      const noise = hashNoise(Math.cos(a) * 2.4 + seed * 7.3, Math.sin(a) * 2.4 + seed * 4.1, seed * 1.7);
+      const r = s * 0.30 * (0.68 + noise * 0.6);
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.filter = 'blur(7px)';
+    ctx.fillStyle = 'rgba(255,255,255,1)';
+    ctx.fill();
+    return new THREE.CanvasTexture(cv);
+  }
+
+  // a soft, slightly wavy crease — reads as a fine line/wrinkle far better
+  // than a hard-edged rectangle
+  creaseTexture(seed) {
+    const w = 256, h = 56, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d');
+    const bow = (hashNoise(seed, 1.3, 0.7) - 0.5) * h * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.04, h * 0.5);
+    ctx.quadraticCurveTo(w * 0.5, h * 0.5 + bow, w * 0.96, h * 0.5);
+    ctx.filter = 'blur(2.5px)';
+    ctx.lineWidth = h * 0.22;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(90,62,42,0.6)';
+    ctx.stroke();
+    return new THREE.CanvasTexture(cv);
+  }
+
   // subtle pore / micro-texture bump+roughness map so the skin isn't perfectly smooth
   skinDetailTextures() {
     const s = 512;
@@ -342,6 +381,10 @@ export class SkinScene {
   buildFeatures() {
     this.featGroup = new THREE.Group(); this.scene.add(this.featGroup);
     this.soft = this.softTexture();
+    this.blotches = [1, 2, 3, 4, 5].map((s) => this.blotchTexture(s));
+    this.creases = [1, 2, 3].map((s) => this.creaseTexture(s));
+    const pickBlotch = () => this.blotches[Math.floor(Math.random() * this.blotches.length)];
+    const pickCrease = () => this.creases[Math.floor(Math.random() * this.creases.length)];
     const orient = (mesh, h) => { mesh.position.copy(h.point).addScaledVector(h.normal, 0.006); mesh.lookAt(h.point.clone().add(h.normal)); };
 
     // coordinate ranges differ between the procedural sculpt and the uploaded
@@ -373,43 +416,71 @@ export class SkinScene {
     // normal continuous surface so it needs an explicit exclusion
     const nearEye = (h) => P.eyeCenters.some(([ex, ey]) => Math.abs(h.point.x - ex) < 0.13 && Math.abs(h.point.y - ey) < 0.09);
 
+    // pimples: a soft inflamed halo blending into the skin, a raised bump,
+    // and — on roughly half of them — a paler "head", instead of one flat
+    // solid-color ball sitting on top of the skin
     this.acnePool = [];
     for (let i = 0; i < 26; i++) {
       const h = this.faceHit(P.acneX, P.acneY); if (!h || nearEye(h)) continue;
-      const r = 0.022 + Math.random() * 0.016;
-      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12), new THREE.MeshStandardMaterial({ color: 0xc85b4e, roughness: 0.5, emissive: 0x5a1712, emissiveIntensity: 0.25 }));
-      m.position.copy(h.point).addScaledVector(h.normal, r * 0.5); m.scale.setScalar(0.001); m.visible = false;
-      this.featGroup.add(m); this.acnePool.push(m);
+      const group = new THREE.Group();
+      const r = 0.020 + Math.random() * 0.014;
+      // inflamed halo — sized well past the bump's own silhouette so it
+      // actually reads as a surrounding red margin rather than being hidden
+      // behind the raised bump
+      const haloSize = r * 2 * (2.6 + Math.random() * 0.6);
+      const halo = new THREE.Mesh(new THREE.PlaneGeometry(haloSize, haloSize),
+        new THREE.MeshBasicMaterial({ map: pickBlotch(), transparent: true, color: 0xc4574a, opacity: 0, depthWrite: false }));
+      halo.position.copy(h.point).addScaledVector(h.normal, 0.004); halo.lookAt(h.point.clone().add(h.normal));
+      group.add(halo);
+      const bump = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12),
+        new THREE.MeshStandardMaterial({ color: 0xb2544a, roughness: 0.55, emissive: 0x3a1410, emissiveIntensity: 0.18 }));
+      bump.position.copy(h.point).addScaledVector(h.normal, r * 0.55);
+      group.add(bump);
+      let tip = null;
+      if (Math.random() < 0.5) {
+        // positioned past the bump's own outer surface (center + radius) so
+        // it actually protrudes as a visible "head" instead of being
+        // swallowed entirely inside the bump's opaque volume
+        const tipR = r * 0.45;
+        tip = new THREE.Mesh(new THREE.SphereGeometry(tipR, 10, 10),
+          new THREE.MeshStandardMaterial({ color: 0xe7d2b6, roughness: 0.3 }));
+        tip.position.copy(h.point).addScaledVector(h.normal, r * 0.55 + r + tipR * 0.4);
+        group.add(tip);
+      }
+      group.visible = false;
+      group.userData = { isPimple: true, halo, bump, tip, haloMaxOp: 0.55 };
+      this.featGroup.add(group); this.acnePool.push(group);
     }
     this.spotPool = [];
     for (let i = 0; i < 16; i++) {
       const h = this.faceHit(P.spotX, P.spotY); if (!h || nearEye(h)) continue;
       if (Math.abs(h.point.x) < P.spotMinAbsX) continue;
       const s = 0.09 + Math.random() * 0.07;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: this.soft, transparent: true, color: 0x8a5636, opacity: 0, depthWrite: false }));
-      orient(m, h); m.visible = false; this.featGroup.add(m); this.spotPool.push(m);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: pickBlotch(), transparent: true, color: 0x7f4f33, opacity: 0, depthWrite: false }));
+      orient(m, h); m.rotateZ(Math.random() * Math.PI * 2); m.visible = false; this.featGroup.add(m); this.spotPool.push(m);
     }
     this.scarPool = [];
     for (let i = 0; i < 12; i++) {
       const h = this.faceHit(P.scarX, P.scarY); if (!h) continue;
       if (Math.abs(h.point.x) < P.scarMinAbsX) continue;
       const s = 0.05 + Math.random() * 0.04;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: this.soft, transparent: true, color: 0x7c4a38, opacity: 0, depthWrite: false }));
-      orient(m, h); m.visible = false; this.featGroup.add(m); this.scarPool.push(m);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: pickBlotch(), transparent: true, color: 0x6e4536, opacity: 0, depthWrite: false }));
+      orient(m, h); m.rotateZ(Math.random() * Math.PI * 2); m.visible = false; this.featGroup.add(m); this.scarPool.push(m);
     }
     this.linePool = [];
     for (let i = 0; i < 8; i++) {
       const h = i < 5 ? this.faceHit(P.lineForeheadX, P.lineForeheadY) : this.faceHit(P.lineCornerX, P.lineCornerY);
       if (!h) continue;
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.008, 0.004), new THREE.MeshBasicMaterial({ color: 0x6e4c38, transparent: true, opacity: 0 }));
-      m.position.copy(h.point).addScaledVector(h.normal, 0.004); m.lookAt(h.point.clone().add(h.normal));
-      m.rotateZ(Math.random() * 0.5 - 0.25); m.visible = false; this.featGroup.add(m); this.linePool.push(m);
+      const len = 0.15 + Math.random() * 0.06;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(len, len * 0.22), new THREE.MeshBasicMaterial({ map: pickCrease(), transparent: true, opacity: 0, depthWrite: false }));
+      orient(m, h); m.rotateZ(Math.random() * 0.5 - 0.25);
+      m.visible = false; this.featGroup.add(m); this.linePool.push(m);
     }
     this.redPool = [];
     for (const [rx, ry] of P.redPatches) {
       const h = this.faceHit([rx - 0.06, rx + 0.06], [ry - 0.06, ry + 0.06], 60); if (!h) continue;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(P.redSize[0], P.redSize[1]), new THREE.MeshBasicMaterial({ map: this.soft, transparent: true, color: 0xd06a5a, opacity: 0, depthWrite: false }));
-      orient(m, h); m.visible = false; this.featGroup.add(m); this.redPool.push(m);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(P.redSize[0], P.redSize[1]), new THREE.MeshBasicMaterial({ map: pickBlotch(), transparent: true, color: 0xc96858, opacity: 0, depthWrite: false }));
+      orient(m, h); m.rotateZ(Math.random() * Math.PI * 2); m.visible = false; this.featGroup.add(m); this.redPool.push(m);
     }
   }
 
@@ -419,8 +490,18 @@ export class SkinScene {
       const m = pool[i];
       if (f <= 0.001) { m.visible = false; continue; }
       m.visible = true;
-      if (m.geometry.type === 'SphereGeometry') m.scale.setScalar(0.4 + 0.6 * f);
-      else { m.material.opacity = maxOp * f; m.scale.setScalar(0.6 + 0.4 * f); }
+      if (m.userData && m.userData.isPimple) {
+        const { halo, bump, tip, haloMaxOp } = m.userData;
+        const grow = 0.35 + 0.65 * f;
+        bump.scale.setScalar(grow);
+        if (tip) tip.scale.setScalar(grow);
+        halo.material.opacity = haloMaxOp * f;
+        halo.scale.setScalar(0.6 + 0.4 * f);
+      } else if (m.geometry.type === 'SphereGeometry') {
+        m.scale.setScalar(0.4 + 0.6 * f);
+      } else {
+        m.material.opacity = maxOp * f; m.scale.setScalar(0.6 + 0.4 * f);
+      }
     }
   }
 
@@ -485,8 +566,6 @@ export class SkinScene {
       this.headMesh = realMesh;
       this.usingRealModel = true;
       this.headYOffset = 0;
-      const box = new THREE.Box3().setFromObject(realMesh);
-      this.buildPedestal(box.min.y, false);
       this.controls.target.set(0, 0.12, 0);
     } else {
       this.buildProceduralHead();
