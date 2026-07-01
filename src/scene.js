@@ -485,8 +485,6 @@ export class SkinScene {
       this.headMesh = realMesh;
       this.usingRealModel = true;
       this.headYOffset = 0;
-      const box = new THREE.Box3().setFromObject(realMesh);
-      this.buildPedestal(box.min.y, false);
       this.controls.target.set(0, 0.12, 0);
     } else {
       this.buildProceduralHead();
