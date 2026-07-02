@@ -117,6 +117,43 @@ export class SkinScene {
     return new THREE.CanvasTexture(cv);
   }
 
+  // depressed-pit scar — fakes concavity under the scene's top-down key
+  // light: a soft dark crescent on the upper half (the shadowed wall of the
+  // pit), a faint light crescent below (the lip catching light), and a
+  // slightly darker center. RGB is baked in; the material stays white-tinted.
+  pitTexture(seed) {
+    const s = 96, cv = document.createElement('canvas'); cv.width = cv.height = s;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, s, s);
+    const cx = s / 2, cy = s / 2;
+    const rr = s * (0.30 + hashNoise(seed, 3, 1) * 0.08);
+    // center depression — darker than the surrounding skin (a pit is in shadow)
+    let grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, rr);
+    grad.addColorStop(0, 'rgba(92,54,44,0.6)');
+    grad.addColorStop(0.7, 'rgba(105,65,54,0.3)');
+    grad.addColorStop(1, 'rgba(105,65,54,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
+    // upper shadow crescent — the pit wall facing away from the key light
+    grad = ctx.createRadialGradient(cx, cy - rr * 0.45, 0, cx, cy - rr * 0.45, rr * 0.85);
+    grad.addColorStop(0, 'rgba(48,26,20,0.65)');
+    grad.addColorStop(1, 'rgba(48,26,20,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy - rr * 0.45, rr * 0.85, 0, Math.PI * 2); ctx.fill();
+    // faint lower light rim — just a hint of the lip catching light
+    grad = ctx.createRadialGradient(cx, cy + rr * 0.72, 0, cx, cy + rr * 0.72, rr * 0.4);
+    grad.addColorStop(0, 'rgba(255,230,210,0.16)');
+    grad.addColorStop(1, 'rgba(255,230,210,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy + rr * 0.72, rr * 0.4, 0, Math.PI * 2); ctx.fill();
+    const tex = new THREE.CanvasTexture(cv);
+    // this texture bakes real RGB shades (unlike the white-alpha blotch/rash
+    // masks, which are colorspace-invariant) — without tagging it sRGB the
+    // renderer treats the values as linear and washes the dark browns out
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
   // subtle pore / micro-texture bump+roughness map so the skin isn't perfectly smooth
   skinDetailTextures() {
     const s = 512;
@@ -414,9 +451,11 @@ export class SkinScene {
     this.blotches = [1, 2, 3, 4, 5].map((s) => this.blotchTexture(s));
     this.creases = [1, 2, 3].map((s) => this.creaseTexture(s));
     this.rashes = [1, 2, 3, 4].map((s) => this.rashTexture(s));
+    this.pits = [1, 2, 3].map((s) => this.pitTexture(s));
     const pickBlotch = () => this.blotches[Math.floor(Math.random() * this.blotches.length)];
     const pickCrease = () => this.creases[Math.floor(Math.random() * this.creases.length)];
     const pickRash = () => this.rashes[Math.floor(Math.random() * this.rashes.length)];
+    const pickPit = () => this.pits[Math.floor(Math.random() * this.pits.length)];
     const orient = (mesh, h) => { mesh.position.copy(h.point).addScaledVector(h.normal, 0.006); mesh.lookAt(h.point.clone().add(h.normal)); };
 
     // coordinate ranges differ between the procedural sculpt and the uploaded
@@ -432,6 +471,7 @@ export class SkinScene {
           redPatches: [[-0.26, 0.06], [0.26, 0.06], [0, 0.24], [-0.20, 0.32], [0.20, 0.32]],
           redSize: [0.26, 0.24],
           eyeCenters: [[-0.10, 0.40], [0.10, 0.40]],
+          acneZones: [[0, 0.52], [-0.26, 0.08], [0.26, 0.08], [0, -0.14], [0, 0.26]],
         }
       : {
           acneX: [-0.5, 0.5], acneY: [-0.55, 0.6],
@@ -442,46 +482,61 @@ export class SkinScene {
           redPatches: [[-0.4, -0.08], [0.4, -0.08], [0, -0.05], [-0.3, 0.14], [0.3, 0.14]],
           redSize: [0.34, 0.30],
           eyeCenters: [],
+          acneZones: [[0, 0.42], [-0.35, -0.08], [0.35, -0.08], [0, -0.45], [0, 0.0]],
         };
     // keep blemishes off the eyes themselves — the procedural head's socket
     // geometry naturally discourages this, but the real scan's eye area is a
     // normal continuous surface so it needs an explicit exclusion
     const nearEye = (h) => P.eyeCenters.some(([ex, ey]) => Math.abs(h.point.x - ex) < 0.13 && Math.abs(h.point.y - ey) < 0.09);
 
-    // pimples: a soft inflamed halo blending into the skin, a raised bump,
-    // and — on roughly half of them — a paler "head", instead of one flat
-    // solid-color ball sitting on top of the skin
+    // pimples: matte flesh-red raised welts (flattened along the surface
+    // normal — not shiny hemispheres), loosely clustered the way real
+    // breakouts group on cheeks/chin/forehead, each with a soft mottled
+    // halo blending into the skin and an occasional small whitehead
     this.acnePool = [];
+    // anchor clusters to the classic breakout zones (forehead, cheeks, nose,
+    // chin) with a little jitter — purely random centers can land lopsided,
+    // leaving one whole side of the face untouched
+    const clusters = P.acneZones.map(([zx, zy]) => [zx + (Math.random() - 0.5) * 0.06, zy + (Math.random() - 0.5) * 0.05]);
+    const gauss = () => (Math.random() + Math.random() + Math.random()) / 1.5 - 1; // ~[-1,1], center-weighted
     for (let i = 0; i < 26; i++) {
-      const h = this.faceHit(P.acneX, P.acneY); if (!h || nearEye(h)) continue;
+      let h = null;
+      if (clusters.length) {
+        const [cx, cy] = clusters[i % clusters.length];
+        const tx = cx + gauss() * 0.10, ty = cy + gauss() * 0.08;
+        h = this.faceHit([tx - 0.02, tx + 0.02], [ty - 0.02, ty + 0.02], 20);
+      }
+      if (!h) h = this.faceHit(P.acneX, P.acneY);
+      if (!h || nearEye(h)) continue;
       const group = new THREE.Group();
-      const r = 0.020 + Math.random() * 0.014;
-      // inflamed halo — sized well past the bump's own silhouette so it
-      // actually reads as a surrounding red margin rather than being hidden
-      // behind the raised bump
-      const haloSize = r * 2 * (2.6 + Math.random() * 0.6);
+      const big = Math.random() < 0.15; // occasional larger papule
+      const r = big ? 0.020 + Math.random() * 0.006 : 0.010 + Math.random() * 0.010;
+      const haloSize = r * 2 * (3.0 + Math.random() * 0.8);
       const halo = new THREE.Mesh(new THREE.PlaneGeometry(haloSize, haloSize),
         new THREE.MeshBasicMaterial({ map: pickRash(), transparent: true, color: 0xc4574a, opacity: 0, depthWrite: false }));
       halo.position.copy(h.point).addScaledVector(h.normal, 0.004); halo.lookAt(h.point.clone().add(h.normal));
       halo.rotateZ(Math.random() * Math.PI * 2);
       group.add(halo);
+      // jittered inflamed pink-red so no two pimples are the identical shade
+      // (deep enough to read as irritation against the scan's tan skin tone)
+      const col = new THREE.Color(0.68 + (Math.random() - 0.5) * 0.08, 0.36 + (Math.random() - 0.5) * 0.07, 0.31 + (Math.random() - 0.5) * 0.06);
       const bump = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12),
-        new THREE.MeshStandardMaterial({ color: 0xb2544a, roughness: 0.55, emissive: 0x3a1410, emissiveIntensity: 0.18 }));
-      bump.position.copy(h.point).addScaledVector(h.normal, r * 0.55);
+        new THREE.MeshStandardMaterial({ color: col, roughness: 0.75 }));
+      // orient local +Z along the surface normal, then flatten that axis so
+      // the sphere reads as a raised welt instead of a ball on the skin
+      bump.position.copy(h.point).addScaledVector(h.normal, r * 0.18);
+      bump.lookAt(h.point.clone().add(h.normal));
       group.add(bump);
       let tip = null;
-      if (Math.random() < 0.5) {
-        // positioned past the bump's own outer surface (center + radius) so
-        // it actually protrudes as a visible "head" instead of being
-        // swallowed entirely inside the bump's opaque volume
-        const tipR = r * 0.45;
+      if (Math.random() < 0.25) {
+        const tipR = r * 0.3;
         tip = new THREE.Mesh(new THREE.SphereGeometry(tipR, 10, 10),
-          new THREE.MeshStandardMaterial({ color: 0xe7d2b6, roughness: 0.3 }));
-        tip.position.copy(h.point).addScaledVector(h.normal, r * 0.55 + r + tipR * 0.4);
+          new THREE.MeshStandardMaterial({ color: 0xe3ceb2, roughness: 0.6 }));
+        tip.position.copy(h.point).addScaledVector(h.normal, r * 0.18 + r * 0.45);
         group.add(tip);
       }
       group.visible = false;
-      group.userData = { isPimple: true, halo, bump, tip, haloMaxOp: 0.55 };
+      group.userData = { isPimple: true, halo, bump, tip, haloMaxOp: 0.4, flat: 0.45 };
       this.featGroup.add(group); this.acnePool.push(group);
     }
     this.spotPool = [];
@@ -493,12 +548,15 @@ export class SkinScene {
       orient(m, h); m.rotateZ(Math.random() * Math.PI * 2); m.visible = false; this.featGroup.add(m); this.spotPool.push(m);
     }
     this.scarPool = [];
-    for (let i = 0; i < 12; i++) {
+    for (let tries = 0; tries < 80 && this.scarPool.length < 16; tries++) {
       const h = this.faceHit(P.scarX, P.scarY); if (!h) continue;
       if (Math.abs(h.point.x) < P.scarMinAbsX) continue;
-      const s = 0.05 + Math.random() * 0.04;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: pickBlotch(), transparent: true, color: 0x6e4536, opacity: 0, depthWrite: false }));
-      orient(m, h); m.rotateZ(Math.random() * Math.PI * 2); m.visible = false; this.featGroup.add(m); this.scarPool.push(m);
+      const s = 0.035 + Math.random() * 0.035;
+      // pit texture has its light/shadow baked in, so the material tint stays
+      // white — and rotation must stay slight so the shadow crescent stays on
+      // top, matching the scene's overhead key light (that's the whole illusion)
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: pickPit(), transparent: true, color: 0xffffff, opacity: 0, depthWrite: false }));
+      orient(m, h); m.rotateZ((Math.random() - 0.5) * 0.5); m.visible = false; this.featGroup.add(m); this.scarPool.push(m);
     }
     this.linePool = [];
     for (let i = 0; i < 8; i++) {
@@ -524,9 +582,11 @@ export class SkinScene {
       if (f <= 0.001) { m.visible = false; continue; }
       m.visible = true;
       if (m.userData && m.userData.isPimple) {
-        const { halo, bump, tip, haloMaxOp } = m.userData;
+        const { halo, bump, tip, haloMaxOp, flat } = m.userData;
         const grow = 0.35 + 0.65 * f;
-        bump.scale.setScalar(grow);
+        // bump is lookAt-oriented with local +Z along the surface normal;
+        // keep it flattened on that axis while growing
+        bump.scale.set(grow, grow, grow * flat);
         if (tip) tip.scale.setScalar(grow);
         halo.material.opacity = haloMaxOp * f;
         halo.scale.setScalar(0.6 + 0.4 * f);
@@ -574,7 +634,7 @@ export class SkinScene {
     const c = state.conditions;
     this.poolUpdate(this.acnePool, c.acne ? v.acne : 0, 1);
     this.poolUpdate(this.spotPool, c.pigment ? v.pigment / 11 : 0, Math.min(1, v.pigment / 85));
-    this.poolUpdate(this.scarPool, c.scars ? v.scars / 14 : 0, Math.min(1, v.scars / 80) * 0.65);
+    this.poolUpdate(this.scarPool, c.scars ? v.scars / 5 : 0, Math.min(1, v.scars / 60));
     this.poolUpdate(this.linePool, c.lines ? v.lines / 16 : 0, Math.min(1, v.lines / 78) * 0.85);
     const redOpacityMax = this.usingRealModel ? 0.6 : 0.42;
     for (const m of this.redPool) { const o = c.redness ? Math.min(1, (v.redness - 22) / 70) * redOpacityMax : 0; m.visible = o > 0.01; m.material.opacity = o; }
@@ -585,6 +645,9 @@ export class SkinScene {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(34, w / h, 0.1, 100);
     this.camera.position.set(2.3, 1.0, 6.4);
+    // narrow stage (stacked mobile layout) — pull back a touch so the whole
+    // head fits the reduced horizontal field of view
+    if (w / h < 1) this.camera.position.set(2.0, 0.9, 7.2);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     this.renderer.setSize(w, h); this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
