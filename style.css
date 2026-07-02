@@ -139,3 +139,30 @@ input[type=range] { accent-color: #c1804f; }
 .metric-fill { height: 100%; border-radius: 5px; transition: width .25s, background .25s; }
 
 .footer-note { margin-top: 26px; padding-top: 16px; border-top: 1px solid rgba(51,41,31,.1); font-size: 11px; line-height: 1.5; color: #a5917c; font-weight: 300; }
+
+/* ===== MOBILE (stacked: 3D face on top, controls scroll below) ===== */
+@media (max-width: 820px) {
+  body { overflow: auto; }
+  .app { flex-direction: column; }
+  .stage { flex: none; height: 52vh; min-height: 300px; }
+  .panel {
+    width: 100%; flex: 1; height: auto; overflow-y: auto;
+    border-left: none; border-top: 1px solid rgba(51,41,31,.1);
+    padding: 18px 16px 32px;
+  }
+  .brand { top: 14px; left: 16px; }
+  .brand-title { font-size: 26px; }
+  .brand-sub { font-size: 14px; }
+  .orbit-hint { display: none; }
+  .status-line { top: 88px; right: 14px; max-width: 200px; }
+  .status-text { font-size: 15px; }
+  .timeline {
+    bottom: 12px; width: calc(100% - 24px);
+    padding: 10px 14px 12px; border-radius: 14px;
+  }
+  .month-label { font-size: 18px; }
+  .play-btn { width: 40px; height: 40px; }
+  .scrub-hint { font-size: 14px; margin-top: 5px; }
+  .seg-btn, .chip-btn { min-height: 40px; }
+  .pour-btn { padding: 13px; }
+}
